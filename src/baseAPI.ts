@@ -11,9 +11,9 @@ export class HTTPRequestError extends Error {
 
 type Method = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
 
-const apiUrl = "/api";
+// const apiUrl = "/api";
 
-export const getFetchers = (apiUrl: string, authProvider: AuthProvider) => {
+export const defaultBrowserFetchProvider = (apiUrl: string, authProvider: AuthProvider) => {
 
     async function api<T>(path: string, method: Method = "GET", body?: any, empty = false, json: boolean = true): Promise<T> {
         const headers = new Headers();

@@ -2,38 +2,66 @@
 const POINTER_TOKEN = '@';
 const REPO_TOKEN = '<!n>';
 
+type ArrayElement<ArrayType extends readonly unknown[]> =
+    ArrayType extends readonly (infer ElementType)[] ? ElementType : never;
 
 const isPointer = (s: any[] | string) => typeof s === 'string' && s[0] === POINTER_TOKEN;
 
-export type IncomingData<T> = {
-    schema: any;
-    objects: any;
+export type FlattenedGraphData<T> = {
+    schema: { [repoName: string]: string };
+    objects: { [objUid: string]: any };
     repos: T;
 }
 
-export default class Graph<R> {
-    graph: any;
-    repos: R;
-    repoMap: any;
-    infos: any;
+type SchemaType = {
+    [repoName: string]: any;
+};
+
+/**
+ * This function takes a given object and returns it's id in order to map it inside a map
+ */
+export type IndexFunction<T> = (obj: T) => number;
+
+/**
+ * Basic index provider, returns the `id` field of the given object
+ * @param obj 
+ * @returns 
+ */
+export const idIndexProvider: IndexFunction<any> = (obj: any) => obj.id as number;
+
+export type IndexStoreProvider<T extends SchemaType> = {
+    [k in keyof T]: IndexFunction<ArrayElement<T[k]>>
+}
+
+export default class Graph<Schema extends SchemaType> {
+    graph: {[k: string]: any};
+    repos: Schema;
+    objects: { [k in keyof Schema]: { [k2: number]: ArrayElement<Schema[k]> } };
+    infos: { [k: string]: number };
     schema: any;
-    constructor() {
+    indexFunction: IndexStoreProvider<Schema>;
+
+    constructor(indexStoreProvider: IndexStoreProvider<Schema>) {
+        this.indexFunction = indexStoreProvider;
         this.graph = {};
         //@ts-ignore
         this.repos = {};
         this.infos = {};
         this.schema = {};
-        this.repoMap = {};
+        //@ts-ignore
+        this.objects = {};
     }
 
     /**
      * @param {object} data
      * @returns {Graph}
      */
-    addParsedJSON = (data: IncomingData<R>) => {
+    loadData = (data: FlattenedGraphData<Schema>) => {
         // don't need to apply checks, it comes from an automated serializer
         this.schema = data.schema;
         // merging data
+        // TODO: assert!
+        // is it what we really want ?
         this.graph = { ...this.graph, ...data.objects };
 
         // creating repos if they don't already exists
@@ -55,28 +83,23 @@ export default class Graph<R> {
     }
 
     /**
-     * @param {string} data
-     * @returns {Graph}
-     */
-    addJSON = (data: string) => this.addParsedJSON(JSON.parse(data));
-
-    // @ts-private
-    /**
      * @param {Object} obj
      * @param {string} key
      * @returns {void}
      */
     private addToRepo = (obj: any, key: string): void => {
+        const objectRepo = obj[REPO_TOKEN];
         // we prevent data duplication, while keeping arrays for faster access
         if (Object.keys(this.infos).includes(key)) {
             //@ts-ignore
-            this.repos[obj[REPO_TOKEN]][this.infos[key]] = obj;
+            this.repos[objectRepo][this.infos[key]] = obj;
         } else {
             // console.log(this.repos);
             //@ts-ignore
             this.infos[key] = this.repos[obj[REPO_TOKEN]].length;
             //@ts-ignore
-            this.repos[obj[REPO_TOKEN]].push(obj);
+            this.objects[objectRepo][this.indexFunction[objectRepo](obj)] = obj;
+            this.repos[objectRepo].push(obj);
         }
     }
 

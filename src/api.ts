@@ -1,41 +1,67 @@
-import { getFetchers } from "./baseAPI";
-import Graph, { IncomingData } from "./graph";
+import Graph, { IndexStoreProvider } from "./graph";
 
-class APIRouter {
-    private _api: BaseAPI;
+export class APIRouter<T> {
+    protected api: BaseAPI<T>;
+    protected graph: Graph<T>;
     private prefix: string;
-    public constructor(baseAPI: BaseAPI, prefix: string) {
-        this._api = baseAPI;
+    public constructor(baseAPI: BaseAPI<T>, prefix: string) {
+        this.api = baseAPI;
+        this.graph = baseAPI.graph;
         this.prefix = prefix;
     }
 
-    public api() {
-        return this._api;
+    protected async get<T>(url: string) {
+        const res = await this.api.get<T>(this.prefix + url);
+        return res;
     }
-
-    public static of(baseAPI: BaseAPI, url: string) {
-        // add prefix
-        return new APIRouter(baseAPI, url);
+    protected async post<T>(url: string, body: any) {
+        const res = await this.api.post<T>(this.prefix + url, body);
+        return res;
     }
-
-    public async get<T>(url: string) {
-        const res = await this._api.get<T>(this.prefix + url);
+    protected async delete<T>(url: string, body: any) {
+        const res = await this.api.delete<T>(this.prefix + url, body);
+        return res;
+    }
+    protected async put<T>(url: string, body: any) {
+        const res = await this.api.put<T>(this.prefix + url, body);
+        return res;
+    }
+    protected async patch<T>(url: string, body: any) {
+        const res = await this.api.patch<T>(this.prefix + url, body);
         return res;
     }
 }
 
-type BuilderType = typeof getFetchers;
-
-
-class BaseAPI {
-    private prefix: string;
+type FetchProvider = (url: string, authProvider: AuthProvider) => ({
     api: <T>(path: string, method?: "GET" | "POST" | "PUT" | "PATCH" | "DELETE", body?: any, empty?: boolean, json?: boolean) => Promise<T>;
     get: <T>(path: string, json?: boolean) => Promise<T>;
-    constructor(url: string, authProvider: AuthProvider, builder: BuilderType) {
+    post: <T>(path: string, body: any) => Promise<T>;
+    patch: <T>(path: string, body?: any) => Promise<T>;
+    put: <T>(path: string, body?: any) => Promise<T>;
+    delete: <T>(path: string, empty?: boolean) => Promise<T>;
+})
+
+class BaseAPI<T> {
+    protected prefix: string;
+    public graph: Graph<T>;
+
+    api: <T>(path: string, method?: "GET" | "POST" | "PUT" | "PATCH" | "DELETE", body?: any, empty?: boolean, json?: boolean) => Promise<T>;
+    get: <T>(path: string, json?: boolean) => Promise<T>;
+    post: <T>(path: string, body: any) => Promise<T>;
+    patch: <T>(path: string, body?: any) => Promise<T>;
+    put: <T>(path: string, body?: any) => Promise<T>;
+    delete: <T>(path: string, empty?: boolean) => Promise<T>;
+
+    constructor(url: string, graph: Graph<T>, authProvider: AuthProvider, builder: FetchProvider) {
+        this.graph = graph;
         this.prefix = url;
-        const funcs = getFetchers(url, authProvider);
+        const funcs = builder(url, authProvider);
         this.api = funcs.api;
         this.get = funcs.get;
+        this.post = funcs.post;
+        this.patch = funcs.patch;
+        this.put = funcs.put;
+        this.delete = funcs.delete;
     }
 }
 
@@ -44,35 +70,64 @@ export interface AuthProvider {
     token: string;
 }
 
-type KiwiSchema = {
-    audits: Audit[];
+type APIRouterProvider<T> = new (baseAPI: BaseAPI<T>, prefix: string) => APIRouter<T>;
+
+export class APIStore<T> {
+    private routes: { [k: string]: { url: string, router: APIRouterProvider<T> } };
+    constructor(routes?: { [k: string]: { url: string, router: APIRouterProvider<T> } }) {
+        this.routes = routes || {};
+    }
+    public at(name: string, url: string, router: APIRouterProvider<T>) {
+        this.routes[name] = { url, router };
+        return this;
+    }
+
+    public data() {
+        return this.routes;
+    }
 }
 
-class API<Schema, T> {
+type APIConstuctoreArgs<T> = {
+    url: string;
+    authProvider: AuthProvider;
+    fetchProvider: FetchProvider;
+    store: APIStore<T>;
+    indexProvider: IndexStoreProvider<T>;
+}
+
+export class API<Schema, T> {
     private url: string;
     private _graph: Graph<Schema>;
     private handlers: T;
-    private baseAPI: BaseAPI;
+    private baseAPI: BaseAPI<Schema>;
 
-    constructor(url: string, authProvider: AuthProvider, builder: BuilderType, handlers: any) {
+    constructor(args: APIConstuctoreArgs<Schema>) {
+        const { url, store, fetchProvider: builder, authProvider, indexProvider } = args;
         this.url = url;
-        this.baseAPI = new BaseAPI(url, authProvider, builder);
-        this.registerHandlers(handlers);
-        this._graph = new Graph<Schema>();
+        this.baseAPI = new BaseAPI(url, this._graph, authProvider, builder);
+        this.registerHandlers(store);
+        this._graph = new Graph<Schema>(indexProvider);
     }
 
-    private registerHandlers(handlers: any) {
-        // TODO: dummy for now
-        Object.keys(handlers).forEach(k => {
-            this.registerHandler(k, handlers[k])
+    private registerHandlers(handlers: APIStore<Schema>) {
+        const routes = handlers.data();
+
+        Object.keys(routes).forEach(k => {
+            const d = routes[k];
+            this.registerHandler(k, d.router, d.url);
         })
     }
 
-    private registerHandler(name: string, handler: typeof APIRouter) {
-        this.handlers[name] = handler.of(this.baseAPI, this.url);
+    private registerHandler(name: string, handler: new (baseAPI: BaseAPI<Schema>, prefix: string) => APIRouter<Schema>, url: string) {
+        this.handlers[name] = new handler(this.baseAPI, url);
     }
 
-    public use() {
+    /**
+     * 
+     * @param settings For later use if we want to specify how to apply cache
+     * @returns 
+     */
+    public use(settings?: any) {
         return this.handlers;
     }
 
@@ -82,58 +137,3 @@ class API<Schema, T> {
 
 }
 
-type Audit = {
-    id: number;
-}
-
-class AuditHandlers extends APIRouter {
-    getById(id: number) {
-        return this.api().get<Audit>(`${id}`);
-    }
-}
-
-type KiwiHandlers = {
-    audit: AuditHandlers
-}
-
-const handlers = {
-    audit: AuditHandlers
-}
-
-const dummyAuthProvider: AuthProvider = {
-    token: "testToken",
-    isTokenExpired: () => false,
-}
-
-
-const api = new API<KiwiSchema, KiwiHandlers>('http://localhost:3000/api', dummyAuthProvider, getFetchers, handlers);
-
-const auditId = 10;
-
-const res = api
-    .use()
-    .audit
-    .getById(auditId);
-    // wrap result to cache result in graph
-    // and return the interesting one
-
-const audit = api.graph().repos.audits.find(i => i.id === 1);
-
-/*
-usage:
-
-// create audit
-
-api
-    .use('audit')
-    .post(data)
-
-
-// get audit by id
-
-    api
-        .use('audit')
-        .get(id)
-
-
-*/
